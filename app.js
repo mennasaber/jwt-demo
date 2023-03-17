@@ -3,9 +3,12 @@ const express = require("express");
 const app = express();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { verify } = require("./middleware/auth");
+const verify = require("./middleware/auth").verify;
+const passport = require("passport");
 app.use(express.json());
-app.post("/register", async (req, res) => {
+require("./middleware/auth").googleStrategy(passport);
+// ******************** Default sign up ********************
+app.post("/auth/signup", async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !password || !email) {
     return res.status(400).send("Name, Email and Password are required");
@@ -30,16 +33,19 @@ app.post("/register", async (req, res) => {
   return res.status(201).send({ token });
 });
 
-app.post("/login", async (req, res) => {
+// ******************** Default sign in ********************
+app.post("/auth/signin", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).send("email and password is required");
   }
-  const existUser = await User.findOne({ email: email.toLowerCase() });
+  const existUser = await User.findOne({
+    email: email.toLowerCase(),
+    accountType: "Default",
+  });
   if (!existUser) {
     return res.status(404).send("User does not exist");
   }
-  console.log(existUser);
   const isMatch = await bcrypt.compare(password, existUser.password);
   if (!isMatch) {
     return res.status(404).send("Invalid Credentials");
@@ -54,8 +60,47 @@ app.post("/login", async (req, res) => {
   return res.status(200).send({ token });
 });
 
-app.use(verify);
-app.get("/validate", (req, res) => {
+// ******************** Google sign in ********************
+app.get(
+  "/auth/signin-with-google",
+  passport.authenticate("google", {
+    scope: ["email", "profile"],
+  })
+);
+
+// ******************** Googel sign in callback ********************
+app.get(
+  "/auth/signin-with-google/callback",
+  passport.authenticate("google", { session: false }),
+  async (req, res) => {
+    const email = req.user._json.email;
+    const name = req.user._json.name;
+    if (!name || !email) {
+      return res.status(400).send("Name and Email are required");
+    }
+    let existUser = await User.findOne({
+      email: email.toLowerCase(),
+      accountType: "Google",
+    });
+    if (!existUser) {
+      existUser = await User.create({
+        accountType: "Google",
+        name,
+        email: email.toLowerCase(),
+      });
+    }
+    const token = jwt.sign(
+      { _id: existUser._id, email: email.toLowerCase() },
+      process.env.JWT_TOKEN,
+      {
+        expiresIn: "2h",
+      }
+    );
+    return res.status(200).send({ token });
+  }
+);
+
+app.get("/auth/validate", verify, (req, res) => {
   return res.status(200).send(req.user);
 });
 module.exports = app;
